@@ -742,6 +742,18 @@ export default function ScrapeJobsJobsPage() {
   const clearFilters = () => setFilters(DEFAULT_FILTERS);
   const activeCount = countActiveFilters(filters);
 
+  async function scrapeJobs() {
+    try {
+      const res = await fetch("/api/scrape");
+      const data = await res.json();
+      if (data.success) {
+        console.log(data);
+      }
+    } catch (error) {
+      console.log(error);
+    }
+  }
+
   const toggleSave = (id) => {
     setSavedJobs((prev) => {
       const next = new Set(prev);
@@ -853,7 +865,7 @@ export default function ScrapeJobsJobsPage() {
               />
             </div>
             <button
-              onClick={() => setScraped(true)}
+              onClick={() => scrapeJobs()}
               className="flex items-center gap-2 px-5 py-3.5 rounded-2xl text-[13.5px] font-semibold text-white whitespace-nowrap flex-shrink-0
                 transition-all duration-150 shadow-sm
                 hover:shadow-[0_4px_16px_rgba(37,99,235,0.4)] hover:-translate-y-px active:translate-y-0"
