@@ -113,7 +113,6 @@ async function detectBlock(page: Page) {
 // ─────────────────────────────────────────────────────────────
 // WWR
 // ─────────────────────────────────────────────────────────────
-
 async function scrapeWWR(context: BrowserContext): Promise<Job[]> {
   const page = await createPage(context);
 
@@ -126,82 +125,94 @@ async function scrapeWWR(context: BrowserContext): Promise<Job[]> {
 
     await detectBlock(page);
 
-    const liCount = await page.locator("ul.jobs > li:not(.view-all)").count();
+    // Real container: section.jobs > article > ul > li.new-listing-container
+    // Ads share the same <ul> but carry the "listing-ad" class — must exclude.
+    const liSelector =
+      "section.jobs article ul li.new-listing-container:not(.listing-ad)";
+
+    const liCount = await page.locator(liSelector).count();
     console.log(`[WWR] li count: ${liCount}`);
 
-    const firstLiHTML = await page
-      .locator("ul.jobs > li:not(.view-all)")
-      .first()
-      .innerHTML()
-      .catch(() => "none");
-    console.log("[WWR] First <li> HTML:\n", firstLiHTML);
+    if (liCount === 0) {
+      await dumpDebug(page, "wwr");
+    }
 
-    const jobs = await page.evaluate(() => {
+    const jobs = await page.evaluate((sel) => {
       const results: {
         title: string;
         company: string;
         location: string;
         tags: string[];
         url: string;
-        postedAt: null;
+        postedAt: string | null;
         source: string;
       }[] = [];
 
       document.querySelectorAll("section.jobs").forEach((section) => {
-        const category = section.querySelector("h2")?.textContent?.trim() ?? "";
+        const category =
+          section.querySelector("h2 a")?.textContent?.trim() ??
+          section.querySelector("h2")?.textContent?.trim() ??
+          "";
 
-        section.querySelectorAll("ul.jobs > li:not(.view-all)").forEach((li) => {
-          const anchor = li.querySelector("a[href]");
-          const href = anchor?.getAttribute("href") ?? "";
-          if (!href) return;
+        section
+          .querySelectorAll("li.new-listing-container:not(.listing-ad)")
+          .forEach((li) => {
+            const anchor = li.querySelector<HTMLAnchorElement>(
+              "a.listing-link--unlocked, a[href^='/remote-jobs/']"
+            );
+            const href = anchor?.getAttribute("href") ?? "";
+            if (!href) return;
 
-          const title =
-            (anchor?.querySelector("span.title") ?? li.querySelector("span.title"))
-              ?.textContent?.trim() ?? "";
+            const title =
+              li
+                .querySelector(".new-listing__header__title__text")
+                ?.textContent?.trim() ?? "";
 
-          const company =
-            (anchor?.querySelector("span.company") ?? li.querySelector("span.company"))
-              ?.textContent?.trim() ?? "";
+            // company name text includes a trailing <img>; textContent strips
+            // the img but leaves whitespace — trim handles it.
+            const company =
+              li
+                .querySelector(".new-listing__company-name")
+                ?.textContent?.replace(/\s+/g, " ")
+                .trim() ?? "";
 
-          const location =
-            (anchor?.querySelector("span.region") ?? li.querySelector("span.region"))
-              ?.textContent?.trim() ?? "Remote";
+            const location =
+              li
+                .querySelector(".new-listing__company-headquarters")
+                ?.textContent?.replace(/\s+/g, " ")
+                .trim() ?? "Remote";
 
-          if (!title && !company) return;
+            const categoryTags = Array.from(
+              li.querySelectorAll(".new-listing__categories__category")
+            )
+              .map((el) => el.textContent?.replace(/\s+/g, " ").trim() ?? "")
+              .filter(Boolean);
 
-          results.push({
-            title: title || company,
-            company,
-            location,
-            tags: category ? [category] : [],
-            url: href.startsWith("http")
-              ? href
-              : `https://weworkremotely.com${href}`,
-            postedAt: null,
-            source: "WeWorkRemotely",
+            const postedAt =
+              li
+                .querySelector(".new-listing__header__icons__date")
+                ?.textContent?.trim() ?? null;
+
+            if (!title && !company) return;
+
+            results.push({
+              title: title || company,
+              company,
+              location,
+              tags: category ? [category, ...categoryTags] : categoryTags,
+              url: href.startsWith("http")
+                ? href
+                : `https://weworkremotely.com${href}`,
+              postedAt,
+              source: "WeWorkRemotely",
+            });
           });
-        });
       });
 
       return results;
-    });
+    }, liSelector);
 
     console.log(`[WWR] Extracted ${jobs.length} jobs`);
-
-    if (jobs.length === 0) {
-      const sectionCount = await page.locator("section.jobs").count();
-      const spanClasses = await page.evaluate(() =>
-        Array.from(
-          new Set(
-            Array.from(
-              document.querySelectorAll("ul.jobs > li:not(.view-all) span")
-            ).map((s) => s.className)
-          )
-        )
-      );
-      console.warn(`[WWR] 0 jobs extracted. sections=${sectionCount}, span classes found:`, spanClasses);
-      await dumpDebug(page, "wwr");
-    }
 
     return jobs.map((job) => ({
       ...job,
